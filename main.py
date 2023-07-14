@@ -1,23 +1,23 @@
+import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog
 import subprocess
-from threading import Thread
-from tkinter.ttk import Progressbar, Scrollbar
-import pkg_resources
-from tqdm import tqdm
+from tkinter.ttk import Scrollbar, Notebook
 
 
 def compile_code():
-    code = code_text.get("1.0", tk.END).strip()
+    current_tab_index = notebook.index(notebook.select())
+    code_text_widget = code_text_widgets[current_tab_index]
+    code = code_text_widget.get("1.0", tk.END).strip()
     if code:
         try:
             process = subprocess.Popen(['python', '-c', code], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                        universal_newlines=True)
             output, error = process.communicate()
-            output_text.configure(state="normal")  # Enable editing temporarily
+            output_text.configure(state="normal")
             output_text.delete("1.0", tk.END)
             output_text.insert(tk.END, output)
-            output_text.configure(state="disabled")  # Disable editing again
+            output_text.configure(state="disabled")
             if error:
                 messagebox.showerror("Error", error)
         except Exception as e:
@@ -26,163 +26,181 @@ def compile_code():
         messagebox.showwarning("Warning", "No code to compile!")
 
 
-def open_file():
-    file_path = filedialog.askopenfilename(filetypes=[("Python Files", "*.py")])
-    if file_path:
-        with open(file_path, "r") as file:
-            code = file.read()
-            code_text.delete("1.0", tk.END)
-            code_text.insert(tk.END, code)
+def open_folder():
+    global current_folder_path
+    folder_path = filedialog.askdirectory()
+    if folder_path:
+        file_list.delete(0, tk.END)  # Clear the file list
+        for file_name in os.listdir(folder_path):
+            file_list.insert(tk.END, file_name)
+        current_folder_path = folder_path
+
+
+def open_file(event=None):
+    selection = file_list.curselection()
+    if selection:
+        file_name = file_list.get(selection[0])
+        file_path = os.path.join(current_folder_path, file_name)
+        if os.path.isfile(file_path):
+            with open(file_path, "r") as file:
+                code = file.read()
+                create_new_tab(file_path, code)
 
 
 def save_file():
-    file_path = filedialog.asksaveasfilename(filetypes=[("Python Files", "*.py")])
+    current_tab_index = notebook.index(notebook.select())
+    code_text_widget = code_text_widgets[current_tab_index]
+    current_file_path = tab_file_paths[current_tab_index]
+    if current_file_path:
+        with open(current_file_path, "w") as file:
+            code = code_text_widget.get("1.0", tk.END).strip()
+            file.write(code)
+    else:
+        save_as_file()
+
+
+def save_as_file():
+    current_tab_index = notebook.index(notebook.select())
+    initial_file_path = tab_file_paths[current_tab_index]
+    file_path = filedialog.asksaveasfilename(filetypes=[("Python Files", "*.py")], initialfile=initial_file_path)
     if file_path:
         with open(file_path, "w") as file:
-            code = code_text.get("1.0", tk.END).strip()
+            code_text_widget = code_text_widgets[current_tab_index]
+            code = code_text_widget.get("1.0", tk.END).strip()
             file.write(code)
+        notebook.tab(current_tab_index, text=os.path.basename(file_path))
+        tab_file_paths[current_tab_index] = file_path
 
 
-def install_package_thread(package_name, progress_window, progress_bar, progress_speed_label):
-    try:
-        process = subprocess.Popen(['pip', 'install', package_name], stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1)
-        progress_bar["value"] = 0
-        progress_speed_label.config(text="")
+def create_new_file():
+    global current_folder_path
 
-        while process.poll() is None:
-            output = process.stdout.readline().strip()
-            if output:
-                if "Installing" in output:
-                    progress_bar["value"] = 0
-                elif "Successfully installed" in output:
-                    progress_bar["value"] = 100
-                elif "Collecting" in output:
-                    collected = output.split("Collecting ")[-1]
-                    total = len(collected.split("/"))
-                    progress_bar["value"] = int((total / 100) * 80)
-                elif "Installing collected" in output:
-                    progress_bar["value"] = 90
-
-        progress_window.destroy()
-
-        output, _ = process.communicate()
-        if output:
-            messagebox.showinfo("Installation Output", output)
+    if current_folder_path:
+        new_file_name = simpledialog.askstring("Create New File", "Enter the name of the new file:")
+        if new_file_name:
+            new_file_path = os.path.join(current_folder_path, new_file_name)
+            if not os.path.exists(new_file_path):
+                with open(new_file_path, "w") as file:
+                    file.write('print("PyIDE By Sahil Thakur")')
+                file_list.insert(tk.END, new_file_name)
+                file_list.selection_clear(0, tk.END)
+                file_list.selection_set(tk.END)
+                open_file()
+                messagebox.showinfo("File Created", f"The file '{new_file_name}' has been created.")
+            else:
+                messagebox.showwarning("File Already Exists", "A file with the same name already exists in the folder.")
         else:
-            messagebox.showinfo("Installation Complete", f"The package '{package_name}' is installed.")
-    except Exception as e:
-        messagebox.showerror("Error", str(e))
+            messagebox.showwarning("File Name Not Provided", "Please enter a valid file name.")
+    else:
+        messagebox.showwarning("Folder Not Selected", "Please open a folder using the 'Open Folder' button.")
 
 
-def install_package():
-    package_name = simpledialog.askstring("Install Package", "Enter the name of the Python package to install:")
-    if package_name:
-        package_found = package_name in [dist.key for dist in pkg_resources.working_set]
-        if package_found:
-            messagebox.showinfo("Package Already Installed", f"The package '{package_name}' is already installed.")
-            return
+def create_new_tab(file_path=None, code=""):
+    tab_frame = tk.Frame(notebook)
+    notebook.add(tab_frame)
 
-        progress_window = tk.Toplevel(root)
-        progress_window.title("Installing Package")
-        progress_window.geometry("300x100")
+    if file_path:
+        tab_title = os.path.basename(file_path)
+    else:
+        tab_title = "Untitled"
 
-        progress_bar = Progressbar(progress_window, length=200, mode="determinate")
-        progress_bar.pack(pady=10)
+    close_button = tk.Button(tab_frame, text="X", command=close_tab, bg="red", fg="white")
+    close_button.pack(side=tk.RIGHT, padx=(0, 5))
 
-        progress_speed = tk.Label(progress_window, text="")
-        progress_speed.pack(pady=5)
+    code_frame = tk.Frame(tab_frame)
+    code_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        install_thread = Thread(target=install_package_thread,
-                                args=(package_name, progress_window, progress_bar, progress_speed))
-        install_thread.start()
+    code_label = tk.Label(code_frame, text="Code Area")
+    code_label.pack(side=tk.TOP, pady=(0, 10))
 
+    code_text = tk.Text(code_frame, font=("Courier New", 12), height=20, width=80)
+    code_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    code_text.insert(tk.END, code)
 
-def show_installed_packages():
-    installed_packages = [dist.key for dist in pkg_resources.working_set]
+    code_scroll = Scrollbar(code_frame, command=code_text.yview)
+    code_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+    code_text.configure(yscrollcommand=code_scroll.set)
 
-    package_list_window = tk.Toplevel(root)
-    package_list_window.title("Installed Packages")
-    package_list_window.geometry("300x200")
+    notebook.tab(notebook.index(tab_frame), text=tab_title)
+    notebook.select(tab_frame)
 
-    package_list_text = tk.Text(package_list_window, font=("Courier New", 12))
-    package_list_text.pack(fill=tk.BOTH, expand=True)
+    code_text_widgets.append(code_text)
 
-    package_list_scroll = Scrollbar(package_list_window)
-    package_list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-    package_list_text.config(yscrollcommand=package_list_scroll.set)
-    package_list_scroll.config(command=package_list_text.yview)
-
-    for package in installed_packages:
-        package_list_text.insert(tk.END, package + "\n")
-
-    package_list_text.configure(state="disabled")
+    tab_file_paths.append(file_path)
 
 
-def on_closing():
-    if messagebox.askokcancel("Quit", "Do you want to quit?"):
-        root.destroy()
+def close_tab():
+    current_tab_index = notebook.index(notebook.select())
+    if current_tab_index >= 0:
+        notebook.forget(current_tab_index)
+        code_text_widgets.pop(current_tab_index)
+        tab_file_paths.pop(current_tab_index)
 
 
 root = tk.Tk()
 root.title("Python Compiler")
-root.attributes("-fullscreen", False)  # Open in full-screen mode
-root.title("pyIDE @geeksahil")
-photo = tk.PhotoImage(file = "logo.png")
-root.iconphoto(False,photo)
-# Create the toolbar
-toolbar = tk.Frame(root)
-toolbar.pack(side=tk.TOP, padx=10, pady=10)
 
-open_button = tk.Button(toolbar, text="Open", command=open_file)
-open_button.pack(side=tk.LEFT)
+# Create the toolbar frame
+toolbar_frame = tk.Frame(root)
+toolbar_frame.pack(side=tk.TOP, fill=tk.X)
 
-save_button = tk.Button(toolbar, text="Save", command=save_file)
-save_button.pack(side=tk.LEFT)
+# Compile Button
+compile_button = tk.Button(toolbar_frame, text="Compile", command=compile_code)
+compile_button.pack(side=tk.LEFT, padx=5)
 
-compile_button = tk.Button(toolbar, text="Compile", command=compile_code)
-compile_button.pack(side=tk.LEFT)
+# Save Button
+save_button = tk.Button(toolbar_frame, text="Save", command=save_file)
+save_button.pack(side=tk.LEFT, padx=5)
 
-install_button = tk.Button(toolbar, text="Install Package", command=install_package)
-install_button.pack(side=tk.LEFT)
+# Save As Button
+save_as_button = tk.Button(toolbar_frame, text="Save As", command=save_as_file)
+save_as_button.pack(side=tk.LEFT, padx=5)
 
-show_packages_button = tk.Button(toolbar, text="Show Installed Packages", command=show_installed_packages)
-show_packages_button.pack(side=tk.LEFT)
+# Open Folder Button
+open_folder_button = tk.Button(toolbar_frame, text="Open Folder", command=open_folder)
+open_folder_button.pack(side=tk.LEFT, padx=5)
 
-# Create the code editor
-code_text = tk.Text(root, font=("Courier New", 12))
-code_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=0)
+# Create New File Button
+create_file_button = tk.Button(toolbar_frame, text="Create New File", command=create_new_file)
+create_file_button.pack(side=tk.LEFT, padx=5)
 
-code_scroll = Scrollbar(root, command=code_text.yview)
-code_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-code_text.configure(yscrollcommand=code_scroll.set)
+# Create the main frame
+main_frame = tk.Frame(root)
+main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-# Create the output frame
+# Create the sidebar frame
+sidebar_frame = tk.Frame(main_frame, width=200)
+sidebar_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+
+# Create the file list
+file_list = tk.Listbox(sidebar_frame, font=("Courier New", 12))
+file_list.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+file_list.bind("<Double-Button-1>", open_file)
+
+# Create the code editor frame
+code_frame = tk.Frame(main_frame)
+code_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+notebook = Notebook(code_frame)
+notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+code_text_widgets = []
+tab_file_paths = []
+
+# Create the output area
 output_frame = tk.Frame(root)
-output_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+output_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10)
 
-output_text = tk.Text(output_frame, font=("Courier New", 12), state="disabled")
-output_text.pack(fill=tk.BOTH, expand=True)
+output_label = tk.Label(output_frame, text="Output Area")
+output_label.pack(side=tk.TOP, pady=(10, 5))
+
+output_text = tk.Text(output_frame, font=("Courier New", 12), height=5)
+output_text.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
 
 output_scroll = Scrollbar(output_frame, command=output_text.yview)
 output_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 output_text.configure(yscrollcommand=output_scroll.set)
 
-# Configure invisible scrollbars
-code_scroll.configure(orient="vertical", command=code_text.yview)
-output_scroll.configure(orient="vertical", command=output_text.yview)
-
-# Create the project label
-project_label = tk.Label(root, text="Project by GeekSahil", font=("Arial", 10))
-project_label.pack(side=tk.BOTTOM, pady=10)
-
-# Minimize and Close buttons
-minimize_button = tk.Button(root, text="Minimize", command=root.iconify)
-minimize_button.pack(side=tk.RIGHT)
-
-close_button = tk.Button(root, text="Close", command=on_closing)
-close_button.pack(side=tk.RIGHT)
-
-root.protocol("WM_DELETE_WINDOW", on_closing)
+current_folder_path = ""
 
 root.mainloop()
